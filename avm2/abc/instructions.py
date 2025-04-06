@@ -5,10 +5,10 @@ from typing import Any, Callable, ClassVar, Dict, Tuple, Type, TypeVar, NewType,
 
 import avm2.vm
 from avm2.exceptions import ASReturnException, ASJumpException
-from avm2.runtime import undefined
+from avm2.runtime import undefined, ASObject, ASString
 from avm2.abc.parser import read_array
 from avm2.io import MemoryViewReader
-from avm2.abc.enums import MultinameKind
+from avm2.abc.enums import ConstantKind, TraitKind
 
 
 def read_instruction(reader: MemoryViewReader) -> Instruction:
@@ -110,6 +110,14 @@ class BitXor(Instruction):
 class Call(Instruction):
     arg_count: u30
 
+    def execute(self, machine: avm2.vm.VirtualMachine, environment: avm2.vm.MethodEnvironment):
+        args = [environment.operand_stack.pop() for i in range(self.arg_count)]
+        args.reverse()
+        receiver = environment.operand_stack.pop()
+        function = environment.operand_stack.pop()
+        return_value = function.call(receiver, args)
+        environment.operand_stack.append(return_value)
+
 
 @instruction(67)
 class CallMethod(Instruction):
@@ -121,6 +129,25 @@ class CallMethod(Instruction):
 class CallProperty(Instruction):
     index: u30
     arg_count: u30
+
+    def execute(self, machine: avm2.vm.VirtualMachine, environment: avm2.vm.MethodEnvironment):
+        args = [environment.operand_stack.pop() for i in range(self.arg_count)]
+        args.reverse()
+
+        multiname = machine.multinames[self.index]
+        try:
+            name, namespaces = machine.resolve_multiname_identifiers(environment.operand_stack, multiname)
+            object = environment.operand_stack.pop()
+            parent, name, namespace = machine.resolve_multiname(
+                [object],
+                name,
+                namespaces
+            )
+        except KeyError:
+            raise NotImplementedError('TypeError')
+        else:
+            return_value = parent.properties[namespace, name].call(object, args)
+            environment.operand_stack.append(return_value)
 
 
 @instruction(76)
@@ -177,6 +204,12 @@ class CoerceString(Instruction):
 class Construct(Instruction):
     arg_count: u30
 
+    def execute(self, machine: avm2.vm.VirtualMachine, environment: avm2.vm.MethodEnvironment):
+        args = [environment.operand_stack.pop() for i in range(self.arg_count)]
+        args.reverse()
+        constructor = environment.operand_stack.pop()
+        return_value = constructor.construct(args)
+        environment.operand_stack.append(return_value)
 
 @instruction(74)
 class ConstructProp(Instruction):
@@ -185,8 +218,18 @@ class ConstructProp(Instruction):
 
 
 @instruction(73)
-class Construct(Instruction):
+class ConstructSuper(Instruction):
     arg_count: u30
+
+    def execute(self, machine: avm2.vm.VirtualMachine, environment: avm2.vm.MethodEnvironment):
+        args = [environment.operand_stack.pop() for i in range(self.arg_count)]
+        args.reverse()
+        object = environment.operand_stack.pop()
+
+        if object == None or object == undefined:
+            raise NotImplementedError('TypeError')
+
+        # TODO invoke the constructor on the base class of object with the given arguments
 
 
 @instruction(118)
@@ -330,6 +373,20 @@ class EscXElem(Instruction):
 class FindProperty(Instruction):
     index: u30
 
+    def execute(self, machine: avm2.vm.VirtualMachine, environment: avm2.vm.MethodEnvironment):
+        multiname = machine.multinames[self.index]
+        try:
+            name, namespaces = machine.resolve_multiname_identifiers(environment.operand_stack, multiname)
+            parent, _, _ = machine.resolve_multiname(
+                [environment.registers[0]] + environment.scope_stack,
+                name,
+                namespaces
+            )
+        except KeyError:
+            environment.operand_stack.append(machine.global_object)
+        else:
+            environment.operand_stack.append(parent)
+
 
 @instruction(93)
 class FindPropStrict(Instruction):
@@ -355,18 +412,17 @@ class FindPropStrict(Instruction):
 
     def execute(self, machine: avm2.vm.VirtualMachine, environment: avm2.vm.MethodEnvironment):
         multiname = machine.multinames[self.index]
-        # TODO: other kinds of multinames.
-        assert multiname.kind in (MultinameKind.Q_NAME, MultinameKind.Q_NAME_A), multiname
         try:
-            object_, _, _ = machine.resolve_multiname(
-                environment.scope_stack,
-                machine.strings[multiname.name_index],
-                [machine.strings[machine.namespaces[multiname.namespace_index].name_index]],
+            name, namespaces = machine.resolve_multiname_identifiers(environment.operand_stack, multiname)
+            parent, _, _ = machine.resolve_multiname(
+                [environment.registers[0]] + environment.scope_stack,
+                name,
+                namespaces
             )
         except KeyError:
             raise NotImplementedError('ReferenceError')
         else:
-            environment.operand_stack.append(object_)
+            environment.operand_stack.append(parent)
 
 
 @instruction(89)
@@ -403,17 +459,18 @@ class GetLex(Instruction):
 
     def execute(self, machine: avm2.vm.VirtualMachine, environment: avm2.vm.MethodEnvironment):
         multiname = machine.multinames[self.index]
-        assert multiname.kind in (MultinameKind.Q_NAME, MultinameKind.Q_NAME_A)
         try:
-            object_, name, namespace = machine.resolve_multiname(
-                environment.scope_stack,
-                machine.strings[multiname.name_index],
-                [machine.strings[machine.namespaces[multiname.namespace_index].name_index]],
+            name, namespaces = machine.resolve_multiname_identifiers(environment.operand_stack, multiname)
+            parent, name, namespace = machine.resolve_multiname(
+                [environment.registers[0]] + environment.scope_stack,
+                name,
+                namespaces
             )
         except KeyError:
             raise NotImplementedError('ReferenceError')
         else:
-            environment.operand_stack.append(object_.properties[namespace, name])
+            value = machine.resolve_qname(parent, namespace, name)
+            environment.operand_stack.append(value)
 
 
 @instruction(98)
@@ -452,6 +509,22 @@ class GetLocal3(Instruction):
 @instruction(102)
 class GetProperty(Instruction):
     index: u30
+
+    def execute(self, machine: avm2.vm.VirtualMachine, environment: avm2.vm.MethodEnvironment):
+        multiname = machine.multinames[self.index]
+        try:
+            name, namespaces = machine.resolve_multiname_identifiers(environment.operand_stack, multiname)
+            object = environment.operand_stack.pop()
+            parent, name, namespace = machine.resolve_multiname(
+                [object],
+                name,
+                namespaces
+            )
+        except KeyError:
+            environment.operand_stack.append(undefined)
+        else:
+            value = machine.resolve_qname(parent, namespace, name)
+            environment.operand_stack.append(value)
 
 
 @instruction(101)
@@ -662,6 +735,21 @@ class IncrementInteger(Instruction):
 class InitProperty(Instruction):
     index: u30
 
+    def execute(self, machine: avm2.vm.VirtualMachine, environment: avm2.vm.MethodEnvironment):
+        multiname = machine.multinames[self.index]
+        value = environment.operand_stack.pop()
+        try:
+            name, namespaces = machine.resolve_multiname_identifiers(environment.operand_stack, multiname)
+            object = environment.operand_stack.pop()
+            parent, name, namespace = machine.resolve_multiname(
+                [object],
+                name,
+                namespaces
+            )
+        except KeyError:
+            object.properties['', name] = value
+        else:
+            parent.properties[namespace, name] = value
 
 @instruction(177)
 class InstanceOf(Instruction):
@@ -687,6 +775,8 @@ class Jump(Instruction):
 class Kill(Instruction):
     index: u30
 
+    def execute(self, machine: avm2.vm.VirtualMachine, environment: avm2.vm.MethodEnvironment):
+        environment.registers[self.index] = machine.get_constant(ConstantKind.UNDEFINED, 0)
 
 @instruction(9)
 class Label(Instruction):
@@ -765,6 +855,27 @@ class NewClass(Instruction):
     index: u30
 
 
+    def execute(self, machine: avm2.vm.VirtualMachine, environment: avm2.vm.MethodEnvironment):
+        base_type = environment.operand_stack.pop()
+
+        if self.index in machine.class_objects:
+            class_object = machine.class_objects[self.index]
+        else:
+            class_object = ASObject()
+            class_object.base_type = base_type
+            machine.class_objects[self.index] = class_object
+
+            for trait in machine.abc_file.classes[self.index].traits:
+                if trait.kind == TraitKind.CONST:
+                    multiname = machine.multinames[trait.name_index]
+                    class_object.properties[None,
+                                            machine.strings[multiname.name_index]] = ASObject()
+
+        environment.operand_stack.append(class_object)
+        machine.call_method(
+            machine.abc_file.classes[self.index].init_index, class_object)
+
+
 @instruction(64)
 class NewFunction(Instruction):
     index: u30
@@ -807,7 +918,8 @@ class Pop(Instruction):
 
 @instruction(29)
 class PopScope(Instruction):
-    pass
+    def execute(self, machine: avm2.vm.VirtualMachine, environment: avm2.vm.MethodEnvironment):
+        environment.scope_stack.pop()
 
 
 @instruction(36)
@@ -868,6 +980,8 @@ class PushNaN(Instruction):
 class PushNull(Instruction):
     pass
 
+    def execute(self, machine: avm2.vm.VirtualMachine, environment: avm2.vm.MethodEnvironment):
+        environment.operand_stack.append(machine.get_constant(ConstantKind.NULL, 0))
 
 @instruction(48)
 class PushScope(Instruction):
@@ -886,6 +1000,8 @@ class PushShort(Instruction):
 class PushString(Instruction):
     index: u30
 
+    def execute(self, machine: avm2.vm.VirtualMachine, environment: avm2.vm.MethodEnvironment):
+        environment.operand_stack.append(ASString(machine.strings[self.index]))
 
 @instruction(38)
 class PushTrue(Instruction):

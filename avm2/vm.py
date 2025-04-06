@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, DefaultDict, Dict, Iterable, List, Tuple, Union
 
 import avm2.abc.instructions
-from avm2.abc.enums import ConstantKind, MethodFlags, TraitKind
+from avm2.abc.enums import ConstantKind, MethodFlags, TraitKind, MultinameKind
 from avm2.abc.types import (
     ABCClassIndex,
     ABCFile,
@@ -13,10 +13,11 @@ from avm2.abc.types import (
     ABCMethodIndex,
     ABCScriptIndex,
     ASMethodBody,
+    ASMultiname,
 )
 from avm2.exceptions import ASJumpException, ASReturnException
 from avm2.io import MemoryViewReader
-from avm2.runtime import ASObject, undefined
+from avm2.runtime import ASObject, undefined, ASString
 from avm2.swf.types import DoABCTag, Tag, TagType
 
 
@@ -87,11 +88,41 @@ class VirtualMachine:
     # Resolving.
     # ------------------------------------------------------------------------------------------------------------------
 
+    def resolve_multiname_identifiers(self, operand_stack: List[Any], multiname: ASMultiname) -> Tuple[str, Iterable[str]]:
+        if multiname.kind in (MultinameKind.MULTINAME, MultinameKind.MULTINAME_A):
+            name = self.strings[multiname.name_index]
+            namespaces = [
+                self.strings[self.namespaces[namespace_index].name_index]
+                for namespace_index in self.constant_pool.ns_sets[multiname.namespace_set_index].namespaces
+            ]
+
+        elif multiname.kind in (MultinameKind.MULTINAME_L, MultinameKind.MULTINAME_LA):
+            name = operand_stack.pop()
+            if isinstance(name, ASString):
+                name = name.value
+
+            namespaces = [
+                self.strings[self.namespaces[namespace_index].name_index]
+                for namespace_index in self.constant_pool.ns_sets[multiname.namespace_set_index].namespaces
+            ]
+
+        elif multiname.kind in (MultinameKind.Q_NAME, MultinameKind.Q_NAME_A):
+            name = self.strings[multiname.name_index]
+            namespaces = [
+                self.strings[self.namespaces[multiname.namespace_index].name_index]
+            ]
+
+        else:
+            raise NotImplementedError(multiname.kind)
+
+        return name, namespaces
+
     def resolve_multiname(self, stack: List[ASObject], name: str, namespaces: Iterable[str]) -> Tuple[ASObject, str, str]:
         for object_ in reversed(stack):
             for namespace in namespaces:
                 try:
-                    return self.resolve_qname(object_, namespace, name), name, namespace
+                    if self.resolve_qname(object_, namespace, name):
+                        return object_, name, namespace
                 except KeyError:
                     pass
         raise KeyError(name, namespaces)
@@ -100,7 +131,7 @@ class VirtualMachine:
         # Typically, the order of the search for resolving multinames is
         # the object’s declared traits, its dynamic properties, and finally the prototype chain.
         # TODO: declared traits.
-        return object_.properties[namespace, name]
+        return object_.get_property(namespace, name)
         # TODO: prototype chain.
 
     def lookup_class(self, qualified_name: str) -> ABCClassIndex:
@@ -174,7 +205,8 @@ class VirtualMachine:
         while True:
             try:
                 # FIXME: cache already read instructions.
-                avm2.abc.instructions.read_instruction(reader).execute(self, environment)
+                ins = avm2.abc.instructions.read_instruction(reader)
+                ins.execute(self, environment)
             except ASReturnException as e:
                 return e.return_value
             except ASJumpException as e:
