@@ -98,21 +98,18 @@ class MemoryViewReader:
         """
         Read variable-length encoded 32-bit unsigned or signed integer value: ASVM2 u30, u32 and s32.
         """
-        value = self.read_u8()
-        if not value & 0x00000080:
-            return value if unsigned else self.extend_sign(value, 0x00000040)
-        value = (value & 0x0000007F) | (self.read_u8() << 7)
-        if not value & 0x00004000:
-            return value if unsigned else self.extend_sign(value, 0x00002000)
-        value = (value & 0x00003FFF) | (self.read_u8() << 14)
-        if not value & 0x00200000:
-            return value if unsigned else self.extend_sign(value, 0x00100000)
-        value = (value & 0x001FFFFF) | (self.read_u8() << 21)
-        if not value & 0x10000000:
-            return value if unsigned else self.extend_sign(value, 0x08000000)
-        value = (value & 0x0FFFFFFF) | (self.read_u8() << 28)
-        assert not value & 0x800000000, hex(value)
-        return value if unsigned else self.extend_sign(value, 0x400000000)  # FIXME: unsure if that's the correct mask
+
+        value = 0
+        for i in range(0, 35, 7):
+            byte = self.read_u8()
+            value |= (byte & 0x7F) << i
+            if not byte & 0x80:
+                break
+
+        if unsigned:
+            return value
+
+        return self.extend_sign(value, 0x00000040 << i)
 
     @staticmethod
     def extend_sign(value: int, mask: int) -> int:
