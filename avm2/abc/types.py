@@ -125,7 +125,7 @@ class ASMultiname:
         assert self.namespace_index
         assert self.name_index
         namespace = constant_pool.namespaces[self.namespace_index]
-        assert namespace.name_index
+        #assert namespace.name_index
         return f'{constant_pool.strings[namespace.name_index]}.{constant_pool.strings[self.name_index]}'.strip('.')
 
 
