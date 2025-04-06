@@ -37,3 +37,15 @@ class SymbolsTag:
             for _ in range(count)
         }
 
+
+@dataclass
+class DefineBinaryDataTag:
+    tag: int
+    reserved: int
+    data: str
+
+    def __init__(self, raw: memoryview):
+        reader = MemoryViewReader(raw)
+        self.tag = reader.read_u16()
+        self.reserved = reader.read_u32()
+        self.data = reader.read_all()
