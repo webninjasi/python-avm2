@@ -1,6 +1,6 @@
 Adobe Flash SWF file parser and AVM2 virtual machine implementation in pure Python.
 
-Development is still ongoing.
+This fork is hacky and I'll only update it when I need it.
 
 ## Assumptions
 
@@ -48,7 +48,9 @@ machine.call_method('battle.BattleCore.hitrateIntensity', undefined, 4, 8)
 
 ## Links
 
-- https://wwwimages2.adobe.com/content/dam/acom/en/devnet/pdf/avm2overview.pdf
+- https://burgerlib.readthedocs.io/en/latest/avm2overview.pdf
+- https://open-flash.github.io/mirrors/swf-spec-19.pdf
+- https://github.com/ruffle-rs/ruffle/tree/master/core/src/avm2
 - https://github.com/ArachisH/Flazzy
 
 ### [`abcFormat.txt`](https://github.com/nxmirrors/tamarin-central/blob/master/core/abcFormat.txt)
