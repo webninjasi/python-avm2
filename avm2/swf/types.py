@@ -23,3 +23,17 @@ class DoABCTag:
         self.flags = DoABCTagFlags(reader.read_u32())
         self.name = reader.read_string()
         self.abc_file = reader.read_all()
+
+
+@dataclass
+class SymbolsTag:
+    tags: dict[int, str]
+
+    def __init__(self, raw: memoryview):
+        reader = MemoryViewReader(raw)
+        count = reader.read_u16()
+        self.tags = {
+            reader.read_u16(): reader.read_string()
+            for _ in range(count)
+        }
+
